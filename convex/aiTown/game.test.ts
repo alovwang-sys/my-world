@@ -64,8 +64,14 @@ test('movement and messages keep a human present; only actual inactivity removes
 
   game.handleInput(now + 10, 'startConversation', { playerId, invitee: npcId });
   game.handleInput(now + 20, 'acceptInvite', { playerId: npcId, conversationId });
+  game.world.conversations.get(conversationId)!.tick(game, now + 21);
   const sentAt = now + HUMAN_IDLE_TOO_LONG - 1;
-  game.handleInput(sentAt, 'finishSendingMessage', { playerId, conversationId, timestamp: sentAt });
+  game.handleInput(sentAt, 'finishSendingMessage', {
+    playerId,
+    conversationId,
+    messageUuid: 'human-1',
+    text: 'Hello',
+  });
   human.tick(game, sentAt + 2);
   expect(game.world.players.has(playerId)).toBe(true);
   expect(human.lastInput).toBe(sentAt);
@@ -74,7 +80,8 @@ test('movement and messages keep a human present; only actual inactivity removes
   game.handleInput(sentAt + 10, 'finishSendingMessage', {
     playerId: npcId,
     conversationId,
-    timestamp: sentAt + 10,
+    messageUuid: 'npc-1',
+    text: 'Hello back',
   });
   expect(human.lastInput).toBe(sentAt);
   expect(() =>

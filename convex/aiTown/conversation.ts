@@ -11,6 +11,7 @@ import { Game } from './game';
 import { stopPlayer, blocked, movePlayer } from './movement';
 import { ConversationMembership, serializedConversationMembership } from './conversationMembership';
 import { parseMap, serializeMap } from '../util/object';
+import { acceptMessage, messageFields } from './messageSubmission';
 
 export class Conversation {
   id: GameId<'conversations'>;
@@ -26,6 +27,7 @@ export class Conversation {
     timestamp: number;
   };
   numMessages: number;
+  replyError?: string;
   participants: Map<GameId<'players'>, ConversationMembership>;
 
   constructor(serialized: SerializedConversation) {
@@ -43,6 +45,7 @@ export class Conversation {
       timestamp: lastMessage.timestamp,
     };
     this.numMessages = numMessages;
+    this.replyError = serialized.replyError;
     this.participants = parseMap(participants, ConversationMembership, (m) => m.playerId);
   }
 
@@ -191,12 +194,24 @@ export class Conversation {
   }
 
   stop(game: Game, now: number) {
+    if (!game.world.conversations.has(this.id)) return;
+    game.endedConversations.push({
+      id: this.id,
+      creator: this.creator,
+      created: this.created,
+      ended: now,
+      numMessages: this.numMessages,
+      lastMessage: this.lastMessage,
+      participants: [...this.participants.keys()],
+    });
     delete this.isTyping;
     for (const [playerId, member] of this.participants.entries()) {
       const agent = [...game.world.agents.values()].find((a) => a.playerId === playerId);
       if (agent) {
         agent.lastConversation = now;
-        agent.toRemember = this.id;
+        // Ended operations cannot send into a later conversation.
+        delete agent.inProgressOperation;
+        if (process.env.VECTOR_MEMORY_ENABLED === 'true') agent.toRemember = this.id;
       }
     }
     game.world.conversations.delete(this.id);
@@ -219,6 +234,7 @@ export class Conversation {
       isTyping,
       lastMessage,
       numMessages,
+      replyError: this.replyError,
       participants: serializeMap(this.participants),
     };
   }
@@ -242,11 +258,29 @@ export const serializedConversation = {
     }),
   ),
   numMessages: v.number(),
+  replyError: v.optional(v.string()),
   participants: v.array(v.object(serializedConversationMembership)),
 };
 export type SerializedConversation = ObjectType<typeof serializedConversation>;
 
 export const conversationInputs = {
+  retryReply: inputHandler({
+    args: { playerId, conversationId },
+    handler: (game, now, args): null => {
+      const id = parseGameId('players', args.playerId);
+      const conversation = game.world.conversations.get(
+        parseGameId('conversations', args.conversationId),
+      );
+      if (
+        !game.world.players.get(id)?.human ||
+        conversation?.participants.get(id)?.status.kind !== 'participating' ||
+        ![...conversation.participants.values()].every((m) => m.status.kind === 'participating')
+      )
+        throw new Error('对话已结束或尚未接通，请重新打招呼。');
+      delete conversation.replyError;
+      return null;
+    },
+  }),
   // Start a conversation, inviting the specified player.
   // Conversations can only have two participants for now,
   // so we don't have a separate "invite" input.
@@ -293,6 +327,8 @@ export const conversationInputs = {
       if (!conversation) {
         throw new Error(`Invalid conversation ID: ${conversationId}`);
       }
+      if (conversation.participants.get(playerId)?.status.kind !== 'participating')
+        throw new Error('Not participating');
       if (conversation.isTyping && conversation.isTyping.playerId !== playerId) {
         throw new Error(
           `Player ${conversation.isTyping.playerId} is already typing in ${conversationId}`,
@@ -304,22 +340,23 @@ export const conversationInputs = {
   }),
 
   finishSendingMessage: inputHandler({
-    args: {
-      playerId,
-      conversationId,
-      timestamp: v.number(),
-    },
+    args: messageFields,
     handler: (game: Game, now: number, args): null => {
-      const playerId = parseGameId('players', args.playerId);
-      const conversationId = parseGameId('conversations', args.conversationId);
-      const conversation = game.world.conversations.get(conversationId);
-      if (!conversation) {
-        throw new Error(`Invalid conversation ID: ${conversationId}`);
-      }
-      if (conversation.isTyping && conversation.isTyping.playerId === playerId) {
-        delete conversation.isTyping;
-      }
-      conversation.lastMessage = { author: playerId, timestamp: args.timestamp };
+      const authorId = parseGameId('players', args.playerId);
+      const conversation = game.world.conversations.get(
+        parseGameId('conversations', args.conversationId),
+      );
+      if (
+        !conversation ||
+        !game.world.players.has(authorId) ||
+        ![...conversation.participants.values()].every((m) => m.status.kind === 'participating') ||
+        !conversation.participants.has(authorId)
+      )
+        throw new Error('对话已结束或尚未接通，请重新打招呼。');
+      if (!acceptMessage(game, now, args)) return null;
+      if (conversation.isTyping?.playerId === authorId) delete conversation.isTyping;
+      delete conversation.replyError;
+      conversation.lastMessage = { author: authorId, timestamp: now };
       conversation.numMessages++;
       return null;
     },

@@ -13,7 +13,7 @@ import { PlayerDescription, serializedPlayerDescription } from './playerDescript
 import { Location, locationFields, playerLocation } from './location';
 import { runAgentOperation } from './agent';
 import { GameId, IdTypes, allocGameId } from './ids';
-import { InputArgs, InputNames, inputs } from './inputs';
+import { InputArgs, InputNames, Inputs, inputs } from './inputs';
 import {
   AbstractGame,
   EngineUpdate,
@@ -25,6 +25,11 @@ import { internal } from '../_generated/api';
 import { HistoricalObject } from '../engine/historicalObject';
 import { AgentDescription, serializedAgentDescription } from './agentDescription';
 import { parseMap, serializeMap } from '../util/object';
+import {
+  closedConversationFields,
+  ClosedConversation,
+  recordConversation,
+} from '../agent/conversationMemory';
 
 const gameState = v.object({
   world: v.object(serializedWorld),
@@ -40,6 +45,17 @@ const gameStateDiff = v.object({
   agentDescriptions: v.optional(v.array(v.object(serializedAgentDescription))),
   worldMap: v.optional(v.object(serializedWorldMap)),
   agentOperations: v.array(v.object({ name: v.string(), args: v.any() })),
+  acceptedMessages: v.array(
+    v.object({
+      conversationId: v.string(),
+      messageUuid: v.string(),
+      author: v.string(),
+      text: v.string(),
+      sentAt: v.number(),
+      confirmationVersion: v.literal(1),
+    }),
+  ),
+  endedConversations: v.array(v.object(closedConversationFields)),
 });
 type GameStateDiff = Infer<typeof gameStateDiff>;
 
@@ -59,6 +75,9 @@ export class Game extends AbstractGame {
   agentDescriptions: Map<GameId<'agents'>, AgentDescription>;
 
   pendingOperations: Array<{ name: string; args: any }> = [];
+
+  acceptedMessages: GameStateDiff['acceptedMessages'] = [];
+  endedConversations: ClosedConversation[] = [];
 
   numPathfinds: number;
 
@@ -154,7 +173,11 @@ export class Game extends AbstractGame {
     this.pendingOperations.push({ name, args });
   }
 
-  handleInput<Name extends InputNames>(now: number, name: Name, args: InputArgs<Name>) {
+  handleInput<Name extends InputNames>(
+    now: number,
+    name: Name,
+    args: InputArgs<Name>,
+  ): ReturnType<Inputs[Name]['handler']> {
     const handler = inputs[name]?.handler;
     if (!handler) {
       throw new Error(`Invalid input: ${name}`);
@@ -165,7 +188,7 @@ export class Game extends AbstractGame {
       const player = this.world.players.get(args.playerId as GameId<'players'>);
       if (player?.human) player.lastInput = now;
     }
-    return result;
+    return result as ReturnType<Inputs[Name]['handler']>;
   }
 
   beginStep(_now: number) {
@@ -242,8 +265,12 @@ export class Game extends AbstractGame {
     const result: GameStateDiff = {
       world: { ...this.world.serialize(), historicalLocations },
       agentOperations: this.pendingOperations,
+      acceptedMessages: this.acceptedMessages,
+      endedConversations: this.endedConversations,
     };
     this.pendingOperations = [];
+    this.acceptedMessages = [];
+    this.endedConversations = [];
     if (this.descriptionsModified) {
       result.playerDescriptions = serializeMap(this.playerDescriptions);
       result.agentDescriptions = serializeMap(this.agentDescriptions);
@@ -265,38 +292,21 @@ export class Game extends AbstractGame {
         await ctx.db.insert('archivedPlayers', { worldId, ...player });
       }
     }
-    for (const conversation of existingWorld.conversations) {
-      if (!newWorld.conversations.some((c) => c.id === conversation.id)) {
-        const participants = conversation.participants.map((p) => p.playerId);
-        const archivedConversation = {
-          worldId,
-          id: conversation.id,
-          created: conversation.created,
-          creator: conversation.creator,
-          ended: Date.now(),
-          lastMessage: conversation.lastMessage,
-          numMessages: conversation.numMessages,
-          participants,
-        };
-        await ctx.db.insert('archivedConversations', archivedConversation);
-        for (let i = 0; i < participants.length; i++) {
-          for (let j = 0; j < participants.length; j++) {
-            if (i == j) {
-              continue;
-            }
-            const player1 = participants[i];
-            const player2 = participants[j];
-            await ctx.db.insert('participatedTogether', {
-              worldId,
-              conversationId: conversation.id,
-              player1,
-              player2,
-              ended: Date.now(),
-            });
-          }
-        }
-      }
+    for (const message of diff.acceptedMessages) {
+      const existing = await ctx.db
+        .query('messages')
+        .withIndex('submission', (q) =>
+          q
+            .eq('worldId', worldId)
+            .eq('conversationId', message.conversationId)
+            .eq('messageUuid', message.messageUuid),
+        )
+        .unique();
+      if (existing) throw new Error('Message already committed; duplicate input rejected');
+      await ctx.db.insert('messages', { worldId, ...message });
     }
+    for (const snapshot of diff.endedConversations)
+      await recordConversation(ctx, worldId, snapshot);
     for (const conversation of existingWorld.agents) {
       if (!newWorld.agents.some((a) => a.id === conversation.id)) {
         await ctx.db.insert('archivedAgents', { worldId, ...conversation });

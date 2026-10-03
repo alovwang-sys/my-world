@@ -30,6 +30,7 @@ const input = v.object({
   // since we don't guarantee strict monotonicity here. So, an input may not get
   // assigned to the engine step whose time interval contains this timestamp.
   received: v.number(),
+  submissionKey: v.optional(v.string()),
 });
 
 export const engine = v.object({
@@ -51,6 +52,8 @@ export const engine = v.object({
 export type Engine = Infer<typeof engine>;
 
 export const engineTables = {
-  inputs: defineTable(input).index('byInputNumber', ['engineId', 'number']),
+  inputs: defineTable(input)
+    .index('byInputNumber', ['engineId', 'number'])
+    .index('submission', ['engineId', 'submissionKey']),
   engines: defineTable(engine),
 };

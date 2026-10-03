@@ -149,4 +149,28 @@ describe('BigModel adapter', () => {
     );
     await expect(chatCompletion({ messages: [] })).rejects.toThrow('Empty chat completion');
   });
+
+  test('retries a TLS failure with the remaining total time budget', async () => {
+    jest.useFakeTimers();
+    const timeout = jest.spyOn(AbortSignal, 'timeout');
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    const fetchMock = jest
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => {
+        jest.setSystemTime(Date.now() + 40_000);
+        throw new TypeError('tls handshake eof');
+      })
+      .mockResolvedValueOnce(jsonResponse({ choices: [{ message: { content: 'Hello!' } }] }));
+    globalThis.fetch = fetchMock;
+    try {
+      const request = chatCompletion({ messages: [] });
+      await jest.advanceTimersByTimeAsync(3000);
+      expect((await request).content).toBe('Hello!');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(timeout.mock.calls[0][0]).toBe(90_000);
+      expect(timeout.mock.calls[1][0]).toBeLessThan(50_000);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

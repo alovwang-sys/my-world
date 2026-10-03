@@ -9,6 +9,7 @@
  */
 
 import type * as agent_conversation from "../agent/conversation.js";
+import type * as agent_conversationMemory from "../agent/conversationMemory.js";
 import type * as agent_embeddingsCache from "../agent/embeddingsCache.js";
 import type * as agent_memory from "../agent/memory.js";
 import type * as aiTown_agent from "../aiTown/agent.js";
@@ -24,6 +25,7 @@ import type * as aiTown_inputs from "../aiTown/inputs.js";
 import type * as aiTown_insertInput from "../aiTown/insertInput.js";
 import type * as aiTown_location from "../aiTown/location.js";
 import type * as aiTown_main from "../aiTown/main.js";
+import type * as aiTown_messageSubmission from "../aiTown/messageSubmission.js";
 import type * as aiTown_movement from "../aiTown/movement.js";
 import type * as aiTown_player from "../aiTown/player.js";
 import type * as aiTown_playerDescription from "../aiTown/playerDescription.js";
@@ -60,6 +62,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "agent/conversation": typeof agent_conversation;
+  "agent/conversationMemory": typeof agent_conversationMemory;
   "agent/embeddingsCache": typeof agent_embeddingsCache;
   "agent/memory": typeof agent_memory;
   "aiTown/agent": typeof aiTown_agent;
@@ -75,6 +78,7 @@ declare const fullApi: ApiFromModules<{
   "aiTown/insertInput": typeof aiTown_insertInput;
   "aiTown/location": typeof aiTown_location;
   "aiTown/main": typeof aiTown_main;
+  "aiTown/messageSubmission": typeof aiTown_messageSubmission;
   "aiTown/movement": typeof aiTown_movement;
   "aiTown/player": typeof aiTown_player;
   "aiTown/playerDescription": typeof aiTown_playerDescription;

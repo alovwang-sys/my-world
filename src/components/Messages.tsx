@@ -5,6 +5,8 @@ import { MessageInput } from './MessageInput';
 import { Player } from '../../convex/aiTown/player';
 import { Conversation } from '../../convex/aiTown/conversation';
 import { useEffect, useRef, useState } from 'react';
+import { useSendInput } from '../hooks/sendInput';
+import { toastOnError } from '../toasts';
 
 export function Messages({
   worldId,
@@ -13,6 +15,7 @@ export function Messages({
   inConversationWithMe,
   humanPlayer,
   scrollViewRef,
+  replyPending = false,
 }: {
   worldId: Id<'worlds'>;
   engineId: Id<'engines'>;
@@ -22,6 +25,7 @@ export function Messages({
   inConversationWithMe: boolean;
   humanPlayer?: Player;
   scrollViewRef: React.RefObject<HTMLDivElement>;
+  replyPending?: boolean;
 }) {
   const messages = useQuery(api.messages.listMessages, {
     worldId,
@@ -29,15 +33,32 @@ export function Messages({
   });
   const descriptions = useQuery(api.world.gameDescriptions, { worldId });
   const typing = conversation.kind === 'active' ? conversation.doc.isTyping : undefined;
+  const replyError = conversation.kind === 'active' ? conversation.doc.replyError : undefined;
+  const retryReply = useSendInput(engineId, 'retryReply');
+  const [retrying, setRetrying] = useState(false);
   const isTyping =
-    typing &&
-    typing.playerId !== humanPlayer?.id &&
-    !messages?.some((m) => m.messageUuid === typing.messageUuid);
+    replyPending ||
+    (typing &&
+      typing.playerId !== humanPlayer?.id &&
+      !messages?.some((m) => m.messageUuid === typing.messageUuid));
   const typingName = descriptions?.playerDescriptions.find(
     (p) => p.playerId === typing?.playerId,
   )?.name;
   const pinned = useRef(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  const handleRetry = async () => {
+    if (retrying || !humanPlayer || !inConversationWithMe || conversation.kind !== 'active') return;
+    setRetrying(true);
+    try {
+      await toastOnError(
+        retryReply({ playerId: humanPlayer.id, conversationId: conversation.doc.id }),
+      );
+    } catch {
+      /* The toast explains the rejected retry. */
+    } finally {
+      setRetrying(false);
+    }
+  };
   useEffect(() => {
     pinned.current = true;
     setHasNewMessages(false);
@@ -86,6 +107,20 @@ export function Messages({
           <p className="town-typing" role="status">
             {typingName ?? '对方'} 正在回复<span aria-hidden="true">…</span>
           </p>
+        )}
+        {replyError && (
+          <div className="town-reply-error" role="alert">
+            <p>{replyError}</p>
+            {humanPlayer && inConversationWithMe && (
+              <button
+                className="town-button"
+                disabled={retrying}
+                onClick={() => void handleRetry()}
+              >
+                {retrying ? '正在重试…' : '重试回复'}
+              </button>
+            )}
+          </div>
         )}
         {messages?.length === 0 && !isTyping && (
           <p className="town-system-message">用一句 Hello 开始吧。</p>

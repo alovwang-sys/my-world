@@ -175,6 +175,19 @@ export const sendWorldInput = mutation({
     // if (!identity) {
     //   throw new Error(`Not logged in`);
     // }
+    if (
+      ![
+        'moveTo',
+        'startTyping',
+        'startConversation',
+        'acceptInvite',
+        'rejectInvite',
+        'leaveConversation',
+        'setMemoryMode',
+        'retryReply',
+      ].includes(args.name)
+    )
+      throw new Error('Unsupported human input');
     return await engineInsertInput(ctx, args.engineId, args.name as any, args.args);
   },
 });

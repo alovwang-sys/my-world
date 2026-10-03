@@ -142,7 +142,9 @@ export async function engineInsertInput(
     .withIndex('byInputNumber', (q) => q.eq('engineId', engineId))
     .order('desc')
     .first();
-  const number = prevInput ? prevInput.number + 1 : 0;
+  const engine = await ctx.db.get(engineId);
+  if (!engine) throw new Error('Engine not found');
+  const number = Math.max(prevInput?.number ?? -1, engine.processedInputNumber ?? -1) + 1;
   const inputId = await ctx.db.insert('inputs', {
     engineId,
     number,

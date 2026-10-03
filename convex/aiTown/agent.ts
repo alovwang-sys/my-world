@@ -21,7 +21,7 @@ import { MutationCtx, internalMutation, internalQuery } from '../_generated/serv
 import { distance } from '../util/geometry';
 import { internal } from '../_generated/api';
 import { movePlayer } from './movement';
-import { insertInput } from './insertInput';
+import { enqueueMessage } from './messageSubmission';
 
 export class Agent {
   id: GameId<'agents'>;
@@ -33,6 +33,8 @@ export class Agent {
     name: string;
     operationId: string;
     started: number;
+    conversationId?: string;
+    messageUuid?: string;
   };
 
   constructor(serialized: SerializedAgent) {
@@ -60,7 +62,18 @@ export class Agent {
         return;
       }
       console.log(`Timing out ${JSON.stringify(this.inProgressOperation)}`);
+      const operation = this.inProgressOperation;
       delete this.inProgressOperation;
+      if (operation.name === 'agentGenerateMessage' && operation.conversationId) {
+        const conversation = game.world.conversations.get(
+          parseGameId('conversations', operation.conversationId),
+        );
+        if (conversation?.participants.get(player.id)?.status.kind === 'participating') {
+          if (conversation.isTyping?.playerId === player.id) delete conversation.isTyping;
+          conversation.replyError = '回复超时。你的消息已保存，可以重试回复。';
+          return;
+        }
+      }
     }
     const conversation = game.world.playerConversation(player);
     const member = conversation?.participants.get(player.id);
@@ -160,6 +173,10 @@ export class Agent {
       }
       if (member.status.kind === 'participating') {
         const started = member.status.started;
+        if (conversation.replyError) {
+          if (started + MAX_CONVERSATION_DURATION < now) conversation.stop(game, now);
+          return;
+        }
         if (conversation.isTyping && conversation.isTyping.playerId !== player.id) {
           // Wait for the other player to finish typing.
           return;
@@ -207,6 +224,8 @@ export class Agent {
         }
         // Wait for the awkward deadline if we sent the last message.
         if (conversation.lastMessage.author === player.id) {
+          // Let a human read and choose their next turn; do not repeat the same answer.
+          if (otherPlayer.human) return;
           const awkwardDeadline = conversation.lastMessage.timestamp + AWKWARD_CONVERSATION_TIMEOUT;
           if (now < awkwardDeadline) {
             return;
@@ -253,6 +272,12 @@ export class Agent {
       name,
       operationId,
       started: now,
+      ...('conversationId' in args &&
+      typeof args.conversationId === 'string' &&
+      'messageUuid' in args &&
+      typeof args.messageUuid === 'string'
+        ? { conversationId: args.conversationId, messageUuid: args.messageUuid }
+        : {}),
     };
   }
 
@@ -279,6 +304,8 @@ export const serializedAgent = {
       name: v.string(),
       operationId: v.string(),
       started: v.number(),
+      conversationId: v.optional(conversationId),
+      messageUuid: v.optional(v.string()),
     }),
   ),
 };
@@ -316,20 +343,7 @@ export const agentSendMessage = internalMutation({
     operationId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.insert('messages', {
-      conversationId: args.conversationId,
-      author: args.playerId,
-      text: args.text,
-      messageUuid: args.messageUuid,
-      worldId: args.worldId,
-    });
-    await insertInput(ctx, args.worldId, 'agentFinishSendingMessage', {
-      conversationId: args.conversationId,
-      agentId: args.agentId,
-      timestamp: Date.now(),
-      leaveConversation: args.leaveConversation,
-      operationId: args.operationId,
-    });
+    return await enqueueMessage(ctx, args);
   },
 });
 
@@ -358,7 +372,7 @@ export const findConversationCandidate = internalQuery({
           continue;
         }
       }
-      candidates.push({ id: otherPlayer.id, position });
+      candidates.push({ id: otherPlayer.id, position: otherPlayer.position });
     }
 
     // Sort by distance and take the nearest candidate.

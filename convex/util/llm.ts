@@ -183,21 +183,30 @@ export async function chatCompletion(
           ...(body.stop ? { stop: stopWords.slice(0, 4) } : {}),
         }
       : body;
+  const deadline = Date.now() + 90_000;
   const {
     result: content,
     retries,
     ms,
   } = await retryWithBackoff(async () => {
-    const result = await fetch(apiEndpoint(config, 'chat/completions'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...AuthHeaders(),
-      },
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('Chat completion timed out');
+    let result: Response;
+    try {
+      result = await fetch(apiEndpoint(config, 'chat/completions'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...AuthHeaders(),
+        },
 
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(90_000),
-    });
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(remaining),
+      });
+    } catch (error) {
+      // Fetch rejects on TLS/connect failures before there is an HTTP status.
+      throw { retry: error instanceof TypeError && Date.now() < deadline, error };
+    }
     if (!result.ok) {
       const error = await result.text();
       console.error({ error });

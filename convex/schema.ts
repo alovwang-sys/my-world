@@ -17,9 +17,13 @@ export default defineSchema({
     author: playerId,
     text: v.string(),
     worldId: v.optional(v.id('worlds')),
+    confirmationVersion: v.optional(v.literal(1)),
+    sentAt: v.optional(v.number()),
   })
     .index('conversationId', ['worldId', 'conversationId'])
-    .index('messageUuid', ['conversationId', 'messageUuid']),
+    .index('messageUuid', ['conversationId', 'messageUuid'])
+    .index('submission', ['worldId', 'conversationId', 'messageUuid'])
+    .index('confirmedConversation', ['worldId', 'conversationId', 'confirmationVersion']),
 
   ...agentTables,
   ...aiTownTables,

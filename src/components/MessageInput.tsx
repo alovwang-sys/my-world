@@ -1,8 +1,8 @@
-import { useMutation } from 'convex/react';
-import { useRef, useState } from 'react';
+import { useConvex, useMutation } from 'convex/react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
-import { useSendInput } from '../hooks/sendInput';
+import { useSendInput, waitForInput, InputRejectedError } from '../hooks/sendInput';
 import { Player } from '../../convex/aiTown/player';
 import { Conversation } from '../../convex/aiTown/conversation';
 
@@ -24,6 +24,10 @@ export function MessageInput({
   const inflightUuid = useRef<string>();
   const submitting = useRef(false);
   const composing = useRef(false);
+  const convex = useConvex();
+  const submission = useRef<{ uuid: string; text: string; inputId?: Id<'inputs'> }>();
+  const controller = useRef<AbortController>();
+  useEffect(() => () => controller.current?.abort(), []);
   const writeMessage = useMutation(api.messages.writeMessage);
   const startTyping = useSendInput(engineId, 'startTyping');
 
@@ -33,26 +37,44 @@ export function MessageInput({
     submitting.current = true;
     setSending(true);
     setError('');
-    const typing = conversation.isTyping;
-    const messageUuid =
-      typing?.playerId === humanPlayer.id
-        ? typing.messageUuid
-        : (inflightUuid.current ?? crypto.randomUUID());
+    const attempt =
+      submission.current?.text === text ? submission.current : { uuid: crypto.randomUUID(), text };
+    submission.current = attempt;
+    const abortController = new AbortController();
+    controller.current = abortController;
     try {
-      await writeMessage({
-        worldId,
-        playerId: humanPlayer.id,
-        conversationId: conversation.id,
-        text,
-        messageUuid,
-      });
-      setDraft('');
-    } catch {
-      setError('发送失败，内容已保留，请重试。');
+      const receipt = attempt.inputId
+        ? { kind: 'queued' as const, inputId: attempt.inputId }
+        : await writeMessage({
+            worldId,
+            playerId: humanPlayer.id,
+            conversationId: conversation.id,
+            text,
+            messageUuid: attempt.uuid,
+          });
+      if (receipt.kind === 'queued') {
+        attempt.inputId = receipt.inputId;
+        await waitForInput(convex, receipt.inputId, abortController.signal);
+      }
+      if (!abortController.signal.aborted) {
+        submission.current = undefined;
+        setDraft('');
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        if (error instanceof InputRejectedError) submission.current = undefined;
+        setError(
+          error instanceof InputRejectedError
+            ? `未发送：${error.message} 内容已保留。`
+            : '暂未确认发送结果，内容已保留。重试会查询同一次提交。',
+        );
+      }
     } finally {
       submitting.current = false;
-      setSending(false);
-      inputRef.current?.focus();
+      if (!abortController.signal.aborted) {
+        setSending(false);
+        inputRef.current?.focus();
+      }
     }
   };
   return (
@@ -68,8 +90,9 @@ export function MessageInput({
         id="town-message"
         ref={inputRef}
         rows={2}
+        maxLength={2000}
         autoFocus
-        placeholder="想聊什么？用英语打个招呼吧…"
+        placeholder="聊聊你的偏好，下一次见面再问她是否记得…"
         value={draft}
         readOnly={sending}
         onCompositionStart={() => {
@@ -122,7 +145,7 @@ export function MessageInput({
           className="town-button town-button-primary"
           disabled={sending || !draft.trim()}
         >
-          {sending ? '发送中…' : '发送 ↗'}
+          {sending ? '确认中…' : '发送 ↗'}
         </button>
       </div>
     </form>

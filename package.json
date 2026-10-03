@@ -13,7 +13,8 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --verbose",
     "check:models": "node scripts/check-models.mjs",
     "level-editor": "vite src/editor/",
-    "le": "vite src/editor/"
+    "le": "vite src/editor/",
+    "check:docs": "node scripts/check-docs.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^4.27.0",

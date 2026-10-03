@@ -55,6 +55,7 @@ export const aiTownTables = {
     creator: playerId,
     created: v.number(),
     ended: v.number(),
+    confirmationVersion: v.optional(v.literal(1)),
     lastMessage: serializedConversation.lastMessage,
     numMessages: serializedConversation.numMessages,
     participants: v.array(playerId),

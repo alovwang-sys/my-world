@@ -18,8 +18,6 @@ export const inputs = {
 export type Inputs = typeof inputs;
 export type InputNames = keyof Inputs;
 export type InputArgs<Name extends InputNames> = ObjectType<Inputs[Name]['args']>;
-export type InputReturnValue<Name extends InputNames> = ReturnType<
-  Inputs[Name]['handler']
-> extends Promise<infer T>
-  ? T
-  : never;
+export type InputReturnValue<Name extends InputNames> = Awaited<
+  ReturnType<Inputs[Name]['handler']>
+>;

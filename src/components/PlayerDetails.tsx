@@ -35,6 +35,19 @@ export default function PlayerDetails({
     api.world.previousConversation,
     playerId ? { worldId, playerId } : 'skip',
   );
+  const selectedAgent = [...game.world.agents.values()].find((a) => a.playerId === playerId);
+  const memory = useQuery(
+    api.agent.conversationMemory.preview,
+    selectedAgent && human
+      ? {
+          worldId,
+          ownerPlayerId: selectedAgent.playerId,
+          otherPlayerId: human.id,
+          currentConversationId: humanConversation?.id,
+        }
+      : 'skip',
+  );
+  const setMemoryMode = useSendInput(engineId, 'setMemoryMode');
   const start = useSendInput(engineId, 'startConversation');
   const accept = useSendInput(engineId, 'acceptInvite');
   const reject = useSendInput(engineId, 'rejectInvite');
@@ -171,6 +184,66 @@ export default function PlayerDetails({
           </button>
         )}
       </div>
+      {selectedAgent && human && (
+        <div className="town-memory">
+          <div className="town-memory-heading">
+            <span>✦ {name} 的记忆</span>
+            <button
+              className="town-memory-switch"
+              role="switch"
+              aria-label={`${name} 的历史回忆`}
+              aria-checked={memory?.mode !== 'off'}
+              disabled={pending || !memory}
+              onClick={() =>
+                void run(() =>
+                  setMemoryMode({
+                    playerId: human.id,
+                    agentId: selectedAgent.id,
+                    mode: memory?.mode === 'off' ? 'recent' : 'off',
+                  }),
+                )
+              }
+            >
+              {memory?.mode === 'off' ? '已关闭' : '已开启'}
+            </button>
+          </div>
+          <p>
+            {memory?.mode === 'off'
+              ? '这次只聊眼前。聊天仍会保存，开启后可以再回忆。'
+              : memory?.memories.length
+                ? `她能回忆 ${memory.memories.length} 段近期聊天。试着问：What do you remember about me?`
+                : '告诉她一个偏好，结束对话，再回来看看她是否记得。'}
+          </p>
+          {!!memory?.memories.length && (
+            <details className="town-memory-evidence">
+              <summary>查看记忆来源 · 原句</summary>
+              <div className="town-memory-records">
+                {memory.memories.map((item) => (
+                  <div key={item.conversationId}>
+                    <small>
+                      {new Date(item.endedAt).toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      · 已结束的聊天{item.truncated ? ' · 部分原句' : ''}
+                    </small>
+                    {item.messages.map((message) => (
+                      <p key={message.messageUuid}>
+                        <strong>
+                          {message.authorPlayerId === human.id ? '你' : message.authorName}
+                        </strong>
+                        ：{message.text}
+                      </p>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
       {!isMe && conversation && playerStatus === 'participating' ? (
         <Messages
           key={conversation.id}
@@ -180,6 +253,10 @@ export default function PlayerDetails({
           conversation={{ kind: 'active', doc: conversation }}
           humanPlayer={human}
           scrollViewRef={scrollViewRef}
+          replyPending={
+            selectedAgent?.inProgressOperation?.name === 'agentGenerateMessage' &&
+            selectedAgent.inProgressOperation.conversationId === conversation.id
+          }
         />
       ) : !conversation && previous && !isMe ? (
         <Messages

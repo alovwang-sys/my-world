@@ -73,6 +73,9 @@ export const vacuumTable = internalMutation({
       .withIndex('by_creation_time', (q) => q.lt('_creationTime', before))
       .paginate({ cursor, numItems: DELETE_BATCH_SIZE });
     for (const row of results.page) {
+      // Pending inputs remain replayable after a stopped or restarted engine.
+      if (tableName === 'inputs' && 'returnValue' in row && !row.returnValue) continue;
+      if (tableName === 'inputs' && !('returnValue' in row)) continue;
       await ctx.db.delete(row._id);
     }
     if (!results.isDone) {

@@ -3,39 +3,47 @@ import { InputArgs, InputReturnValue, Inputs } from '../../convex/aiTown/inputs'
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 
-export async function waitForInput(convex: ConvexReactClient, inputId: Id<'inputs'>) {
+export class InputRejectedError extends Error {}
+
+export async function waitForInput(
+  convex: ConvexReactClient,
+  inputId: Id<'inputs'>,
+  signal?: AbortSignal,
+) {
   const watch = convex.watchQuery(api.aiTown.main.inputStatus, { inputId });
   let result = watch.localQueryResult();
-  // The result's undefined if the query's loading and null if the input hasn't
-  // been processed yet.
   if (result === undefined || result === null) {
     let dispose: undefined | (() => void);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: () => void = () => {};
     try {
       await new Promise<void>((resolve, reject) => {
-        dispose = watch.onUpdate(() => {
+        abort = () => reject(new DOMException('Cancelled', 'AbortError'));
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => reject(new Error('确认超时，请重试查询原提交。')), 30000);
+        const check = () => {
           try {
             result = watch.localQueryResult();
-          } catch (e: any) {
-            reject(e);
-            return;
+            if (result !== undefined && result !== null) resolve();
+          } catch (error) {
+            reject(error);
           }
-          if (result !== undefined && result !== null) {
-            resolve();
-          }
-        });
+        };
+        dispose = watch.onUpdate(check);
+        check();
       });
     } finally {
-      if (dispose) {
-        dispose();
-      }
+      dispose?.();
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
     }
   }
-  if (!result) {
-    throw new Error(`Input ${inputId} was never processed.`);
-  }
-  if (result.kind === 'error') {
-    throw new Error(result.message);
-  }
+  if (!result) throw new Error(`Input ${inputId} was never processed.`);
+  if (result.kind === 'error') throw new InputRejectedError(result.message);
   return result.value;
 }
 
